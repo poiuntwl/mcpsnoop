@@ -895,20 +895,85 @@ func TestPairJump(t *testing.T) {
 	if m.inspect == before {
 		t.Fatal("x should move the inspector to the paired frame")
 	}
-	// A refresh under follow must not disturb the inspected frame.
+	// A real dirty refresh under follow must not disturb the inspected frame.
 	jumped := m.inspect
+	jumpedSeq := m.full[jumped].Seq
+	body := m.overlayRaw
 	if !m.follow {
 		t.Fatal("this test needs follow on to cover the regression")
 	}
+	st.Ingest(env(5, proxy.ServerToClient, `{"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":1}}`))
+	m = drive(t, m, frameMsg{})
 	for range refreshEvery {
 		m = drive(t, m, tickMsg(time.Now()))
 	}
 	if m.inspect != jumped {
 		t.Fatalf("follow refresh moved the inspected frame, inspect %d want %d", m.inspect, jumped)
 	}
+	if got := m.full[m.inspect].Seq; got != jumpedSeq {
+		t.Fatalf("follow refresh changed inspected seq to %d, want %d", got, jumpedSeq)
+	}
+	if m.overlayRaw != body {
+		t.Fatal("follow refresh replaced the inspector body")
+	}
 	m = typeRunes(t, m, "x") // and back again
 	if m.inspect != before {
 		t.Fatalf("x again should jump back to the original frame, got %d want %d", m.inspect, before)
+	}
+}
+
+func TestInspectorTracksFrameAcrossLiveWindowEviction(t *testing.T) {
+	st := store.NewBounded(0, 4)
+	seed(st)
+	m := ready(t, st)
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // stream, following seq 4
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // inspect seq 4
+
+	if m.overlay != overlayInspector {
+		t.Fatalf("enter should open the inspector, got overlay %d", m.overlay)
+	}
+	seq := m.full[m.inspect].Seq
+	if seq != 4 || m.inspectSeq != seq {
+		t.Fatalf("inspector identity = index %d seq %d stable %d, want seq 4", m.inspect, seq, m.inspectSeq)
+	}
+	body := m.overlayRaw
+
+	// Adding seq 5 pushes seq 1 out of the four-frame live window. Seq 4 moves
+	// from index 3 to index 2; keeping only the old numeric index would now point
+	// the inspector at the new seq 5 frame.
+	st.Ingest(env(5, proxy.ServerToClient, `{"jsonrpc":"2.0","method":"notifications/progress","params":{"progress":5}}`))
+	m = drive(t, m, frameMsg{})
+	for range refreshEvery {
+		m = drive(t, m, tickMsg(time.Now()))
+	}
+
+	if m.overlay != overlayInspector {
+		t.Fatalf("window shift closed the inspector, overlay %d", m.overlay)
+	}
+	if got := m.full[m.inspect].Seq; got != seq {
+		t.Fatalf("window shift retargeted inspector to seq %d, want %d", got, seq)
+	}
+	if m.inspect != 2 {
+		t.Fatalf("inspected seq should have moved to index 2, got %d", m.inspect)
+	}
+	if m.overlayRaw != body {
+		t.Fatal("window shift replaced the inspector body")
+	}
+
+	// Once seq 4 itself leaves the live window, the inspector must close instead of
+	// silently retargeting to the frame that happens to inherit its old index.
+	for i := 6; i <= 8; i++ {
+		st.Ingest(env(uint64(i), proxy.ServerToClient, `{"jsonrpc":"2.0","method":"notifications/progress"}`))
+	}
+	m = drive(t, m, frameMsg{})
+	for range refreshEvery {
+		m = drive(t, m, tickMsg(time.Now()))
+	}
+	if m.overlay != overlayNone {
+		t.Fatalf("evicted inspected frame should close the inspector, overlay %d", m.overlay)
+	}
+	if !m.flashActive() || !strings.Contains(m.flash, "inspected frame left live memory") {
+		t.Fatalf("eviction should explain why the inspector closed, flash=%q", m.flash)
 	}
 }
 
