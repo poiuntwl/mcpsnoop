@@ -189,6 +189,45 @@ func ready(t *testing.T, st *store.Store) Model {
 	return drive(t, m, frameMsg{})
 }
 
+// TestMultilineToolErrorCannotPushSelectionBelowThePanel recreates the failure
+// where one frame's tool-error text contained newlines. renderStreamTable counts
+// frames, while panelBox counts physical lines; before the row was sanitized the
+// two disagreed, panelBox printed "… N more lines", and the selected frame could
+// be below that clipping point even though window() had selected it.
+func TestMultilineToolErrorCannotPushSelectionBelowThePanel(t *testing.T) {
+	st := store.New()
+	seed(st)
+	st.Ingest(env(5, proxy.ClientToServer, `{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"broken"}}`))
+	st.Ingest(env(6, proxy.ServerToClient, `{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"failure\nstdout_tail:\nline 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8"}],"isError":true}}`))
+	st.Ingest(env(7, proxy.ClientToServer, `{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"after"}}`))
+	st.Ingest(env(8, proxy.ServerToClient, `{"jsonrpc":"2.0","id":4,"result":{"content":[]}}`))
+
+	m := ready(t, st)
+	m = drive(t, m, tea.WindowSizeMsg{Width: 120, Height: 12})
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // enter the stream, following the newest frame
+	if m.selEvent != len(m.timeline)-1 {
+		t.Fatalf("precondition: selected event = %d, want newest %d", m.selEvent, len(m.timeline)-1)
+	}
+	multiline := false
+	for _, e := range m.timeline {
+		if strings.Contains(m.streamCells(e).detail, "\n") {
+			multiline = true
+			break
+		}
+	}
+	if !multiline {
+		t.Fatal("precondition: fixture did not produce multiline stream detail")
+	}
+
+	out := ansi.Strip(m.View())
+	if strings.Contains(out, "more lines") {
+		t.Fatalf("a multiline frame expanded the logical table and forced panel clipping:\n%s", out)
+	}
+	if got := strings.Count(out, "▌"); got != 1 {
+		t.Fatalf("selected stream row should remain visible exactly once, marker count = %d:\n%s", got, out)
+	}
+}
+
 func TestSessionsTableDriftMarkerKeepsLabel(t *testing.T) {
 	st := store.New()
 	// A label long enough that the old wide "! drift " marker truncated its tail

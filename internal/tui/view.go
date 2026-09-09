@@ -589,7 +589,13 @@ func (m Model) rowLine(segs []cell, w int, selected bool) string {
 // kind color, the tool name is bright, DUR and STATUS carry the verdict, and
 // DETAIL is uniformly faint (progress notifications aside).
 func (m Model) streamRow(e store.EventView, lay streamLayout) []cell {
-	c := m.streamCells(e)
+	// A stream row is one terminal row. Several values below come straight from
+	// the wire (tool/method/id, stderr, tool-error text, progress tokens), so quote
+	// control characters before any width calculation. Otherwise a newline can
+	// turn one logical frame into several physical rows and panelBox will clip a
+	// later selected frame as "… N more lines" even though window() kept it in
+	// the logical viewport.
+	c := m.streamCells(e).safeForTable()
 	kind := m.kindStyle(e)
 
 	segs := []cell{
@@ -665,6 +671,27 @@ type streamCell struct {
 	time, dir, method, id, dur, status, detail string
 	tool                                       string       // tool name, rendered bright after the method
 	progress                                   *progressBar // set for a progress notification carrying a total
+}
+
+// safeForTable preserves the invariant that one streamCell renders as one
+// terminal row. safeCell quotes values containing control characters instead of
+// dropping data, which also makes terminal escape sequences visible rather than
+// executable. The inspector still uses the original frame and remains multiline.
+func (c streamCell) safeForTable() streamCell {
+	c.time = safeCell(c.time)
+	c.dir = safeCell(c.dir)
+	c.method = safeCell(c.method)
+	c.id = safeCell(c.id)
+	c.dur = safeCell(c.dur)
+	c.status = safeCell(c.status)
+	c.detail = safeCell(c.detail)
+	c.tool = safeCell(c.tool)
+	if c.progress != nil {
+		p := *c.progress
+		p.token = safeCell(p.token)
+		c.progress = &p
+	}
+	return c
 }
 
 type progressBar struct {

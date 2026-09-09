@@ -73,6 +73,29 @@ func TestTruncateAppendsEllipsisWhenItCuts(t *testing.T) {
 	}
 }
 
+func TestStreamCellSafeForTableQuotesWireControls(t *testing.T) {
+	p := progressBar{done: 1, total: 2, token: "tok\n\x1b[2J"}
+	got := (streamCell{
+		method: "tools/call\nnext", id: "1\r2", status: "work\ting",
+		detail: "line one\nline two\x1b[H", tool: "echo\x1b[31m", progress: &p,
+	}).safeForTable()
+
+	for name, value := range map[string]string{
+		"method": got.method, "id": got.id, "status": got.status,
+		"detail": got.detail, "tool": got.tool, "progress token": got.progress.token,
+	} {
+		if strings.ContainsAny(value, "\r\n\t\x1b") {
+			t.Errorf("%s still contains a terminal control after table sanitizing: %q", name, value)
+		}
+	}
+	if !strings.Contains(got.detail, `\n`) || !strings.Contains(got.detail, `\x1b`) {
+		t.Fatalf("detail should preserve controls as visible escapes, got %q", got.detail)
+	}
+	if p.token != "tok\n\x1b[2J" {
+		t.Fatalf("safeForTable mutated the source progress token: %q", p.token)
+	}
+}
+
 // TestSchemaColumnLabelsFitBesideTheMoreMarker locks the two things the SCHEMA
 // column promises. The label is shown whole, and the trailing "+" that means
 // "more than one kind" is still visible when it applies. Both are decided by
