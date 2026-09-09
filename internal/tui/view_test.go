@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/kerlenton/mcpsnoop/internal/proxy"
 	"github.com/kerlenton/mcpsnoop/internal/store"
@@ -93,6 +94,32 @@ func TestStreamCellSafeForTableQuotesWireControls(t *testing.T) {
 	}
 	if p.token != "tok\n\x1b[2J" {
 		t.Fatalf("safeForTable mutated the source progress token: %q", p.token)
+	}
+}
+
+func TestSessionsTableQuotesDynamicControls(t *testing.T) {
+	m := New(store.New())
+	m.sessions = []store.SessionHeader{{ID: "s1", Label: "bad\nname"}}
+	m.clients = map[string]string{"s1": "cli\x1bX"}
+	m.activity = map[string][]int{}
+
+	out := ansi.Strip(m.renderSessionsTable(100, 4))
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("sessions table = %d physical lines, want header + one session:\n%s", len(lines), out)
+	}
+	for i, line := range lines {
+		if strings.ContainsAny(line, "\r\t\x1b") {
+			t.Fatalf("sessions table line %d still contains a terminal control: %q", i, line)
+		}
+	}
+	for _, want := range []string{`bad\nname`, `cli\x1bX`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("sessions table should preserve %q as visible escapes:\n%s", want, out)
+		}
+	}
+	if got := strings.Count(out, "▌"); got != 1 {
+		t.Fatalf("selected session row should remain visible exactly once, marker count = %d:\n%s", got, out)
 	}
 }
 

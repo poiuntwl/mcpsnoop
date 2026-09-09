@@ -453,7 +453,7 @@ func (m Model) renderSessionsTable(w, h int) string {
 				break
 			}
 		}
-		name := s.Label
+		name := safeCell(s.Label)
 		nameStyle := m.styles.neutral
 		// A one-character "!" marker flags a baseline error (red) or drift (yellow)
 		// without stealing width from the label. The full wording lives in the tool
@@ -467,7 +467,7 @@ func (m Model) renderSessionsTable(w, h int) string {
 		}
 		segs := []cell{seg(cellL(name, nameW), nameStyle)}
 		if showClient {
-			client := valueOr(m.clients[s.ID], "-")
+			client := safeCell(valueOr(m.clients[s.ID], "-"))
 			segs = append(segs, gap, seg(cellL(client, clientW), m.styles.dim))
 		}
 		segs = append(segs,
@@ -1195,40 +1195,40 @@ func (m Model) inspectorHeader(w int) string {
 	parts := []string{m.styles.dim.Render(dirLabel(e.Dir))}
 	if e.Call != nil {
 		if e.Call.Method != "" {
-			parts = append(parts, m.styles.req.Render(e.Call.Method))
+			parts = append(parts, m.styles.req.Render(safeCell(e.Call.Method)))
 		}
-		parts = append(parts, m.styles.dim.Render("id "+e.Call.ID),
+		parts = append(parts, m.styles.dim.Render("id "+safeCell(e.Call.ID)),
 			m.styles.dim.Render(e.Call.Duration().Round(time.Millisecond).String()))
 	}
 	if c.status != "" {
-		parts = append(parts, m.statusStyle(e).Render(c.status))
+		parts = append(parts, m.statusStyle(e).Render(safeCell(c.status)))
 	}
 	left := m.styles.infoVal.Render(fmt.Sprintf("FRAME %d/%d", m.inspect+1, len(m.full))) + "  " + strings.Join(parts, sep)
 	right := m.pairWidget() + sep + m.styles.faint.Render(e.TS.Format("15:04:05.000"))
 	head := bar(w, left, right)
 	// A second chrome line carries the Streamable HTTP request headers (SEP-2243
-	// routing and parameter headers plus MCP-Protocol-Version) verbatim when the
-	// request had them, so the busy meta line stays readable and older transports
-	// show nothing. overlayHeaderH tracks the extra line.
+	// routing and parameter headers plus MCP-Protocol-Version) when the request had
+	// them. Wire-supplied values are quoted when they contain controls so this fixed
+	// chrome cannot grow extra terminal rows. overlayHeaderH tracks the extra line.
 	if hasTransportMeta(e) {
 		var rp []string
 		if e.MCPMethod != "" {
-			rp = append(rp, m.styles.dim.Render("Mcp-Method ")+m.styles.neutral.Render(e.MCPMethod))
+			rp = append(rp, m.styles.dim.Render("Mcp-Method ")+m.styles.neutral.Render(safeCell(e.MCPMethod)))
 		}
 		if e.MCPName != "" {
-			rp = append(rp, m.styles.dim.Render("Mcp-Name ")+m.styles.neutral.Render(e.MCPName))
+			rp = append(rp, m.styles.dim.Render("Mcp-Name ")+m.styles.neutral.Render(safeCell(e.MCPName)))
 		}
 		if e.MCPProtocolVersion != "" {
-			rp = append(rp, m.styles.dim.Render("MCP-Protocol-Version ")+m.styles.neutral.Render(e.MCPProtocolVersion))
+			rp = append(rp, m.styles.dim.Render("MCP-Protocol-Version ")+m.styles.neutral.Render(safeCell(e.MCPProtocolVersion)))
 		}
 		for _, header := range e.MCPParamHeaders {
-			rp = append(rp, m.styles.dim.Render(header.Name+" ")+m.styles.neutral.Render(header.Value))
+			rp = append(rp, m.styles.dim.Render(safeCell(header.Name)+" ")+m.styles.neutral.Render(safeCell(header.Value)))
 		}
 		if e.HTTPStatus != 0 {
 			rp = append(rp, m.styles.dim.Render("HTTP ")+m.styles.neutral.Render(fmt.Sprintf("%d %s", e.HTTPStatus, http.StatusText(e.HTTPStatus))))
 		}
 		if e.AuthChallenge != "" {
-			rp = append(rp, m.styles.dim.Render("WWW-Authenticate ")+m.styles.neutral.Render(e.AuthChallenge))
+			rp = append(rp, m.styles.dim.Render("WWW-Authenticate ")+m.styles.neutral.Render(safeCell(e.AuthChallenge)))
 		}
 		head += "\n" + bar(w, strings.Join(rp, sep), "")
 	}

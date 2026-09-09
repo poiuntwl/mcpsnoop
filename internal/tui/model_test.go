@@ -208,15 +208,26 @@ func TestMultilineToolErrorCannotPushSelectionBelowThePanel(t *testing.T) {
 	if m.selEvent != len(m.timeline)-1 {
 		t.Fatalf("precondition: selected event = %d, want newest %d", m.selEvent, len(m.timeline)-1)
 	}
-	multiline := false
-	for _, e := range m.timeline {
+	multilineAt := -1
+	for i, e := range m.timeline {
 		if strings.Contains(m.streamCells(e).detail, "\n") {
-			multiline = true
+			multilineAt = i
 			break
 		}
 	}
-	if !multiline {
+	if multilineAt < 0 {
 		t.Fatal("precondition: fixture did not produce multiline stream detail")
+	}
+	innerH := max(m.bodyHeight()-2, 1)
+	rows := innerH - 1
+	start, end := window(m.selEvent, len(m.timeline), rows)
+	if multilineAt < start || multilineAt >= end {
+		t.Fatalf("precondition: multiline frame %d is outside visible window [%d,%d)", multilineAt, start, end)
+	}
+	table := ansi.Strip(m.renderStreamTable(max(m.width-2, 1), innerH))
+	wantLines := 1 + end - start // column header + one physical row per visible frame
+	if got := len(strings.Split(strings.TrimSuffix(table, "\n"), "\n")); got != wantLines {
+		t.Fatalf("stream table rendered %d physical lines, want %d logical rows:\n%s", got, wantLines, table)
 	}
 
 	out := ansi.Strip(m.View())
@@ -225,6 +236,48 @@ func TestMultilineToolErrorCannotPushSelectionBelowThePanel(t *testing.T) {
 	}
 	if got := strings.Count(out, "▌"); got != 1 {
 		t.Fatalf("selected stream row should remain visible exactly once, marker count = %d:\n%s", got, out)
+	}
+}
+
+func TestInspectorHeaderQuotesWireControlsButBodyStaysMultiline(t *testing.T) {
+	m := New(store.New())
+	m.full = []store.EventView{{
+		Kind:               store.EventResponse,
+		Raw:                json.RawMessage(`{"jsonrpc":"2.0","id":1,"result":{"content":[]}}`),
+		MCPMethod:          "tools/call\nroute",
+		MCPName:            "echo\x1b[31m",
+		MCPProtocolVersion: "2026\n07",
+		MCPParamHeaders: []proxy.MCPParamHeader{{
+			Name: "Mcp-Param-X\nName", Value: "us\nwest",
+		}},
+		AuthChallenge: "Bearer\nchallenge",
+		Call: &store.CallView{
+			ID: "1\n2", Method: "tools/call\nmethod", TaskID: "task-1",
+			TaskStatus: "working\nbad", State: store.Pending,
+		},
+	}}
+	m.inspect = 0
+
+	header := ansi.Strip(m.inspectorHeader(400))
+	lines := strings.Split(header, "\n")
+	if len(lines) != 2 {
+		t.Fatalf("inspector chrome = %d lines, want exactly 2:\n%s", len(lines), header)
+	}
+	for i, line := range lines {
+		if strings.ContainsAny(line, "\r\t\x1b") {
+			t.Fatalf("inspector chrome line %d still contains a terminal control: %q", i, line)
+		}
+	}
+	for _, want := range []string{
+		`tools/call\nmethod`, `1\n2`, `working\nbad`, `tools/call\nroute`, `echo\x1b[31m`,
+		`2026\n07`, `Mcp-Param-X\nName`, `us\nwest`, `Bearer\nchallenge`,
+	} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("inspector header should preserve %q as visible escapes:\n%s", want, header)
+		}
+	}
+	if body := m.inspectorBody(); !strings.Contains(body, "\n") {
+		t.Fatalf("inspector body should remain multiline, got %q", body)
 	}
 }
 
