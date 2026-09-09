@@ -922,6 +922,37 @@ func TestPairJump(t *testing.T) {
 	}
 }
 
+func TestInspectorDoesNotRenderNewFrameAfterDirtyRefresh(t *testing.T) {
+	st := store.New()
+	st.Ingest(env(1, proxy.ClientToServer, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo"}}`))
+	st.Ingest(env(2, proxy.ServerToClient, `{"jsonrpc":"2.0","id":1,"result":{"marker":"INSPECTED_FRAME"}}`))
+	m := ready(t, st)
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // stream, following seq 2
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // inspect seq 2
+
+	before := ansi.Strip(m.View())
+	if !strings.Contains(before, "INSPECTED_FRAME") {
+		t.Fatalf("inspector fixture is missing its marker:\n%s", before)
+	}
+
+	st.Ingest(env(3, proxy.ServerToClient, `{"jsonrpc":"2.0","method":"notifications/progress","params":{"marker":"NEW_BACKGROUND_FRAME"}}`))
+	m = drive(t, m, frameMsg{})
+	for range refreshEvery {
+		m = drive(t, m, tickMsg(time.Now()))
+	}
+
+	after := ansi.Strip(m.View())
+	if m.overlay != overlayInspector {
+		t.Fatalf("dirty refresh closed the inspector, overlay %d", m.overlay)
+	}
+	if !strings.Contains(after, "INSPECTED_FRAME") {
+		t.Fatalf("dirty refresh replaced the inspected frame:\n%s", after)
+	}
+	if strings.Contains(after, "NEW_BACKGROUND_FRAME") {
+		t.Fatalf("new background frame leaked into the open inspector:\n%s", after)
+	}
+}
+
 func TestInspectorTracksFrameAcrossLiveWindowEviction(t *testing.T) {
 	st := store.NewBounded(0, 4)
 	seed(st)
@@ -974,6 +1005,47 @@ func TestInspectorTracksFrameAcrossLiveWindowEviction(t *testing.T) {
 	}
 	if !m.flashActive() || !strings.Contains(m.flash, "inspected frame left live memory") {
 		t.Fatalf("eviction should explain why the inspector closed, flash=%q", m.flash)
+	}
+}
+
+func TestInspectorEvictionCancelsReplayConfirmation(t *testing.T) {
+	st := store.NewBounded(0, 4)
+	seed(st)
+	st.Ingest(metaEnv("s1", []string{"true"}))
+	m := ready(t, st)
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // stream, following seq 4
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter}) // inspect response seq 4
+	m = typeRunes(t, m, "x")                        // request seq 3
+	m = typeRunes(t, m, "r")                        // confirmation only
+
+	if m.confirm == "" || m.confirmAction == nil {
+		t.Fatal("replay must be waiting for confirmation before eviction")
+	}
+	if m.replaying {
+		t.Fatal("replay started before confirmation")
+	}
+
+	for i := 5; i <= 7; i++ {
+		st.Ingest(env(uint64(i), proxy.ServerToClient, `{"jsonrpc":"2.0","method":"notifications/progress"}`))
+	}
+	m = drive(t, m, frameMsg{})
+	for range refreshEvery {
+		m = drive(t, m, tickMsg(time.Now()))
+	}
+
+	if m.overlay != overlayNone {
+		t.Fatalf("evicted inspected frame should close the inspector, overlay %d", m.overlay)
+	}
+	if m.confirm != "" || m.confirmAction != nil {
+		t.Fatalf("eviction left replay confirmation active: confirm=%q action_nil=%v", m.confirm, m.confirmAction == nil)
+	}
+	if !m.flashActive() || !strings.Contains(m.flash, "inspected frame left live memory") {
+		t.Fatalf("eviction should explain why the inspector closed, flash=%q", m.flash)
+	}
+
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.replaying {
+		t.Fatal("enter after eviction started the cancelled replay")
 	}
 }
 

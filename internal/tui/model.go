@@ -1118,6 +1118,7 @@ func (m *Model) refresh() {
 		// into the same numeric index. If the frame itself is gone, stop acting on a
 		// different frame and tell the user where the complete capture remains.
 		if !m.syncInspectIndex() {
+			m.confirm, m.confirmAction = "", nil
 			m.closeOverlay()
 			m.inspect = clamp(m.inspect, 0, max(len(m.full)-1, 0))
 			m.setFlash("inspected frame left live memory; open the session log to inspect it")
