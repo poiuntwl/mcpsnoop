@@ -614,6 +614,121 @@ func TestStreamFooterCountsSpanWholeSessionUnderFilter(t *testing.T) {
 	}
 }
 
+func TestClearStreamHidesHistoryWithoutResettingSession(t *testing.T) {
+	st := store.New()
+	seed(st)
+	m := ready(t, st)
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	storeFrames := len(st.Timeline("s1"))
+	beforeSignals := m.streamSignals
+	beforeCalls, beforeP50, beforeP95 := m.streamCalls, m.streamP50, m.streamP95
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyCtrlL})
+
+	if len(m.full) != 0 || len(m.timeline) != 0 {
+		t.Fatalf("clear left frames visible: full=%d timeline=%d", len(m.full), len(m.timeline))
+	}
+	if got := len(st.Timeline("s1")); got != storeFrames {
+		t.Fatalf("clear changed the store timeline: %d -> %d", storeFrames, got)
+	}
+	if m.streamSignals != beforeSignals || m.streamCalls != beforeCalls || m.streamP50 != beforeP50 || m.streamP95 != beforeP95 {
+		t.Fatal("clear changed whole-session health or latency statistics")
+	}
+	view := m.View()
+	if !strings.Contains(view, "stream cleared; waiting for new frames") || !strings.Contains(view, "since clear") {
+		t.Fatalf("cleared stream is not disclosed:\n%s", view)
+	}
+	if strings.Contains(view, "no frames yet") {
+		t.Fatalf("cleared stream claims the session never had frames:\n%s", view)
+	}
+
+	st.Ingest(env(5, proxy.ClientToServer, `{"jsonrpc":"2.0","method":"notifications/progress"}`))
+	m.refresh()
+	if len(m.full) != 1 || len(m.timeline) != 1 || m.timeline[0].Seq != 5 {
+		t.Fatalf("new frame after clear not shown alone: full=%d timeline=%+v", len(m.full), m.timeline)
+	}
+	if !strings.Contains(m.View(), "since clear") {
+		t.Fatal("clear marker disappeared once new traffic arrived")
+	}
+}
+
+func TestClearStreamUsesFreshUnfilteredStoreSnapshot(t *testing.T) {
+	st := store.New()
+	seed(st)
+	m := ready(t, st)
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m.applyFilter("tool:echo")
+	m.paused = true
+
+	// This frame is neither in the active filter nor in the model's last refreshed
+	// timeline. Clear must still include it because it was already captured.
+	st.Ingest(env(5, proxy.ClientToServer, `{"jsonrpc":"2.0","method":"notifications/progress"}`))
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyCtrlL})
+	m.applyFilter("")
+
+	if len(m.full) != 0 || len(m.timeline) != 0 {
+		t.Fatalf("pre-clear filtered or paused traffic reappeared: full=%d timeline=%d", len(m.full), len(m.timeline))
+	}
+	if got := m.streamClearedThrough["s1"]; got != 5 {
+		t.Fatalf("clear cutoff = %d, want newest captured seq 5", got)
+	}
+}
+
+func TestClearStreamPreservesCrossBoundaryCallCorrelation(t *testing.T) {
+	st := store.New()
+	t0 := time.Now()
+	st.Ingest(envAt(1, proxy.ClientToServer, t0, `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"slow"}}`))
+	m := ready(t, st)
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyCtrlL})
+
+	st.Ingest(envAt(2, proxy.ServerToClient, t0.Add(time.Second), `{"jsonrpc":"2.0","id":7,"result":{"content":[]}}`))
+	m.refresh()
+
+	if len(m.full) != 1 || m.full[0].Kind != store.EventResponse || m.full[0].Call == nil {
+		t.Fatalf("post-clear response not visible and correlated: %+v", m.full)
+	}
+	if m.full[0].Call.RequestSeq != 1 || !m.full[0].Call.Done() {
+		t.Fatalf("response lost its pre-clear request: %+v", m.full[0].Call)
+	}
+}
+
+func TestClearStreamIsPerSession(t *testing.T) {
+	st := store.New()
+	seed(st)
+	st.Ingest(sessionEnv("s2", "search-api"))
+	m := ready(t, st)
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	first := m.streamSessionID
+	m = drive(t, m, tea.KeyMsg{Type: tea.KeyCtrlL})
+
+	m = typeRunes(t, m, "]")
+	if m.streamSessionID == first || len(m.full) == 0 {
+		t.Fatalf("other session was affected by clear: id=%q frames=%d", m.streamSessionID, len(m.full))
+	}
+	m = typeRunes(t, m, "[")
+	if m.streamSessionID != first || len(m.full) != 0 {
+		t.Fatalf("cleared session did not retain its cutoff: id=%q frames=%d", m.streamSessionID, len(m.full))
+	}
+
+	st.Ingest(env(5, proxy.ClientToServer, `{"jsonrpc":"2.0","method":"notifications/progress"}`))
+	m.refresh()
+	if len(m.full) != 1 || m.full[0].Seq != 5 {
+		t.Fatalf("new traffic in cleared session not shown: %+v", m.full)
+	}
+}
+
+func TestClearStreamKeyIsBoundAndDocumented(t *testing.T) {
+	m := New(store.New())
+	if got := m.keys.ClearStream.Keys(); len(got) != 1 || got[0] != "ctrl+l" {
+		t.Fatalf("clear stream bound to %v, want ctrl+l", got)
+	}
+	m.width, m.height = 120, 40
+	if help := m.renderHelp(); !strings.Contains(help, "clear the stream view") {
+		t.Fatalf("help never documents clear stream:\n%s", help)
+	}
+}
+
 func TestCountLabel(t *testing.T) {
 	cases := []struct {
 		shown, total int

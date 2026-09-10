@@ -123,18 +123,21 @@ type Model struct {
 
 	streamSessionID string // session whose stream we drilled into
 	streamLabel     string
-	full            []store.EventView // whole session, unfiltered, the inspector navigates this
+	full            []store.EventView // inspectable stream window, unfiltered, the inspector navigates this
 	timeline        []store.EventView // full after the stream filter, what the table shows
-	streamSignals   streamSignalCounts
-	streamCalls     int           // completed calls in the session
-	streamP50       time.Duration // median call latency
-	streamP95       time.Duration // 95th percentile call latency
-	selEvent        int           // index into timeline, the table selection
-	inspect         int           // index into full, the frame the inspector shows
-	query           string        // stream filter
-	total           int
-	follow          bool
-	streamSort      sortState
+
+	streamClearedThrough map[string]uint64 // per-session seq cutoff hidden from the stream view
+
+	streamSignals streamSignalCounts
+	streamCalls   int           // completed calls in the session
+	streamP50     time.Duration // median call latency
+	streamP95     time.Duration // 95th percentile call latency
+	selEvent      int           // index into timeline, the table selection
+	inspect       int           // index into full, the frame the inspector shows
+	query         string        // stream filter
+	total         int
+	follow        bool
+	streamSort    sortState
 
 	paused bool
 
@@ -260,6 +263,8 @@ func New(st *store.Store, opts ...Option) Model {
 		view:   viewSessions,
 		follow: true,
 		input:  ti,
+
+		streamClearedThrough: make(map[string]uint64),
 	}
 
 	for _, opt := range opts {
@@ -464,6 +469,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 				m.refresh()
 			}
 		}
+	case key.Matches(msg, m.keys.ClearStream):
+		m.clearCurrentStream()
 
 	case key.Matches(msg, m.keys.Caps):
 		if m.currentSessionID() != "" {
@@ -743,6 +750,23 @@ func (m *Model) applyFilter(q string) {
 		m.query = q
 	}
 	m.refresh()
+}
+
+// clearCurrentStream hides everything observed so far from this session's stream
+// without touching the store or its durable log. A fresh store snapshot makes the
+// boundary independent of the current filter, pause state, or refresh cadence.
+func (m *Model) clearCurrentStream() {
+	if m.view != viewStream || m.streamSessionID == "" {
+		return
+	}
+	full := m.store.Timeline(m.streamSessionID)
+	if len(full) == 0 {
+		m.setFlash("nothing to clear")
+		return
+	}
+	m.streamClearedThrough[m.streamSessionID] = full[len(full)-1].Seq
+	m.refresh()
+	m.setFlash("✓ cleared stream view")
 }
 
 // step moves the cursor by delta with wrap-around (for j/k, ↑/↓).
@@ -1089,7 +1113,15 @@ func (m *Model) refresh() {
 	if m.view != viewStream {
 		return
 	}
-	full := m.store.Timeline(m.streamSessionID)
+	sessionFull := m.store.Timeline(m.streamSessionID)
+	full := sessionFull
+	if cutoff, ok := m.streamClearedThrough[m.streamSessionID]; ok {
+		firstVisible := 0
+		for firstVisible < len(full) && full[firstVisible].Seq <= cutoff {
+			firstVisible++
+		}
+		full = full[firstVisible:]
+	}
 	m.full = full
 	m.total = len(full)
 	// m.inspect indexes m.full, and several inspector readers index it directly, so
@@ -1099,8 +1131,8 @@ func (m *Model) refresh() {
 	m.timeline = m.filterEvents(full)
 	// Count signals over the whole session, not the filtered view, so a stream
 	// filter never hides the session's health in the footer.
-	m.streamSignals = countStreamSignals(full)
-	m.streamCalls, m.streamP50, m.streamP95 = callStats(full)
+	m.streamSignals = countStreamSignals(sessionFull)
+	m.streamCalls, m.streamP50, m.streamP95 = callStats(sessionFull)
 	m.sortStream()
 	// A non-chronological sort means we're inspecting, not tailing.
 	if m.streamSort.col != "" && m.streamSort.col != "time" {
@@ -1607,6 +1639,7 @@ func (m *Model) deleteCurrentSession() {
 	if id == "" {
 		return
 	}
+	delete(m.streamClearedThrough, id)
 	// The id is read out of the log's own session_id field, so it is data rather
 	// than a name mcpsnoop chose, and one carrying ".." resolved to a path outside
 	// the sessions directory. The store entry still goes, since that is in memory

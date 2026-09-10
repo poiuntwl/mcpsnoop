@@ -342,6 +342,7 @@ server is written in.
 | `p` | pause | | `y` | copy |
 | `shift`+`<key>` | sort by column | | `e` | export |
 | `ctrl-d` | delete session | | `f` | follow |
+| `ctrl-l` | clear stream view | | | |
 | `?` | help | | | |
 
 Press `?` in the app for the full list.

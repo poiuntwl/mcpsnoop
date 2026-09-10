@@ -187,7 +187,7 @@ func (m Model) footerHints() string {
 		if m.sessionReplayable() {
 			hs = append(hs, hint{"r", "replay"}, hint{"R", "edit + replay"})
 		}
-		hs = append(hs, hint{"c", "caps"}, hint{"s", "summary"}, hint{"/", "filter"}, hint{"p", "pause"}, hint{"?", "help"})
+		hs = append(hs, hint{"c", "caps"}, hint{"s", "summary"}, hint{"/", "filter"}, hint{"p", "pause"}, hint{"ctrl-l", "clear"}, hint{"?", "help"})
 	}
 	return m.hintsRow(hs)
 }
@@ -223,6 +223,9 @@ func (m Model) footerCounters() string {
 	// would let a reader believe it was.
 	if dropped := m.currentDroppedFrames(); dropped > 0 {
 		parts = append(parts, m.styles.faint.Render(fmt.Sprintf("%d older on disk", dropped)))
+	}
+	if _, cleared := m.streamClearedThrough[m.streamSessionID]; cleared {
+		parts = append(parts, m.styles.faint.Render("since clear"))
 	}
 	// Multi round-trip operations the parking cap retired while they were still
 	// open. Warn rather than faint, because unlike the line above this one makes
@@ -532,6 +535,8 @@ func (m Model) renderStreamTable(w, h int) string {
 	if len(m.timeline) == 0 {
 		if m.query != "" {
 			b.WriteString(m.styles.faint.Render(" no frames match /" + m.query))
+		} else if _, cleared := m.streamClearedThrough[m.streamSessionID]; cleared {
+			b.WriteString(m.styles.faint.Render(" stream cleared; waiting for new frames"))
 		} else {
 			b.WriteString(m.styles.faint.Render(" no frames yet"))
 		}
@@ -1034,6 +1039,7 @@ func (m Model) renderHelp() string {
 		{"i", "show interactions with per-hop timing"},
 		{"p", "pause or resume the stream"},
 		{"f", "toggle follow"},
+		{"ctrl-l", "clear the stream view"},
 	}}
 	manage := helpGroup{"MANAGE", [][2]string{
 		{"y", "copy frame JSON or log path"},
