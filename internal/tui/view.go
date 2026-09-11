@@ -643,7 +643,8 @@ func (m Model) detailSegs(c streamCell, detailW int) []cell {
 	if c.progress != nil {
 		return m.progressSegs(*c.progress, detailW)
 	}
-	return []cell{seg(cellL(c.detail, detailW), m.styles.faint)}
+	detail := strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(c.detail)
+	return []cell{seg(cellL(detail, detailW), m.styles.faint)}
 }
 
 // progressSegs draws a thin ━━──── bar and the done/total fraction, the filled

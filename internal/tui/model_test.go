@@ -2028,6 +2028,28 @@ func TestStreamRowKeepsATransportBodyOnOneLine(t *testing.T) {
 	}
 }
 
+// TestStreamRowKeepsToolErrorTextOnOneLine covers tool errors whose text content
+// contains real line breaks. Pagination counts one event as one row, so letting
+// those breaks reach the terminal makes that row overwrite the rows below it.
+func TestStreamRowKeepsToolErrorTextOnOneLine(t *testing.T) {
+	m := New(store.New())
+	e := store.EventView{
+		Kind: store.EventResponse,
+		Call: &store.CallView{
+			ToolErr: true,
+			Result:  json.RawMessage(`{"content":[{"type":"text","text":"first line\nsecond line"}],"isError":true}`),
+		},
+	}
+	lay := streamLayout{timeW: streamTimeW, timeFmt: "15:04:05.000", detailW: 40, showDetail: true}
+	row := m.rowLine(m.streamRow(e, lay), 120, false)
+	if strings.ContainsAny(row, "\n\r") {
+		t.Fatalf("a stream event must render as one terminal row, got %q", row)
+	}
+	if !strings.Contains(row, "first line second line") {
+		t.Fatalf("flattened tool error text should remain readable, got %q", row)
+	}
+}
+
 // TestStreamFilterFindsAnHTTPStatus covers the bare-number filter and the fact
 // that a transport failure has no call to carry the error flag, so status:err
 // has to match it on the status.
