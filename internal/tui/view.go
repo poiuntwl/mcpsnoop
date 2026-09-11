@@ -600,7 +600,11 @@ func (m Model) streamRow(e store.EventView, lay streamLayout) []cell {
 	// turn one logical frame into several physical rows and panelBox will clip a
 	// later selected frame as "… N more lines" even though window() kept it in
 	// the logical viewport.
-	c := m.streamCells(e).safeForTable()
+	c := m.streamCells(e)
+	if e.Kind == store.EventResponse && e.Call != nil && e.Call.ToolErr {
+		c.detail = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(c.detail)
+	}
+	c = c.safeForTable()
 	kind := m.kindStyle(e)
 
 	segs := []cell{
@@ -648,8 +652,7 @@ func (m Model) detailSegs(c streamCell, detailW int) []cell {
 	if c.progress != nil {
 		return m.progressSegs(*c.progress, detailW)
 	}
-	detail := strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(c.detail)
-	return []cell{seg(cellL(detail, detailW), m.styles.faint)}
+	return []cell{seg(cellL(c.detail, detailW), m.styles.faint)}
 }
 
 // progressSegs draws a thin ━━──── bar and the done/total fraction, the filled
